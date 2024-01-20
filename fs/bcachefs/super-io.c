@@ -783,6 +783,43 @@ retry:
 		if (!ret)
 			goto got_super;
 	}
+	printbuf_exit(&err2);
+	printbuf_reset(&err);
+
+	/*
+	 * Error reading primary superblock - read location of backup
+	 * superblocks:
+	 */
+	bio_reset(sb->bio, sb->bdev, REQ_OP_READ|REQ_SYNC|REQ_META);
+	sb->bio->bi_iter.bi_sector = sb->bdev->bd_nr_sectors - 1;
+	/*
+	 * use sb buffer to read layout, since sb buffer is page aligned but
+	 * layout won't be:
+	 */
+	bch2_bio_map(sb->bio, sb->sb, sizeof(struct bch_sb_layout));
+
+	ret = submit_bio_wait(sb->bio);
+	if (ret) {
+		prt_printf(&err, "IO error: %i", ret);
+		goto err;
+	}
+
+	memcpy(&layout, sb->sb, sizeof(layout));
+	ret = validate_sb_layout(&layout, &err);
+	if (ret)
+		goto err;
+
+	for (i = layout.sb_offset;
+	     i < layout.sb_offset + layout.nr_superblocks; i++) {
+		offset = le64_to_cpu(*i);
+
+		if (offset == opt_get(*opts, sb))
+			continue;
+
+		ret = read_one_super(sb, offset, &err);
+		if (!ret)
+			goto got_super;
+	}
 
 	goto err;
 
